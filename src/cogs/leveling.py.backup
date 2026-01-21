@@ -1,0 +1,189 @@
+"""
+Système de niveaux et d'XP
+"""
+import discord
+from discord import app_commands
+from discord.ext import commands
+from sqlalchemy import select, update
+from src.core.database import User as UserModel, Guild as GuildModel  # ← CORRIGÉ
+from datetime import datetime, timedelta
+import random
+from src.core.logger import setup_logger  # ← CORRIGÉ
+
+logger = setup_logger("Leveling")
+
+class Leveling(commands.Cog):
+    """Système de leveling basé sur l'activité"""
+    
+    def __init__(self, bot):
+        self.bot = bot
+        self.xp_cooldown = {}
+    
+    def calculate_level(self, xp: int) -> int:
+        """Calcule le niveau en fonction de l'XP"""
+        return int((xp / 100) ** 0.5)
+    
+    def xp_for_level(self, level: int) -> int:
+        """Calcule l'XP nécessaire pour un niveau"""
+        return (level ** 2) * 100
+    
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        """Donne de l'XP pour chaque message"""
+        if message.author.bot or not message.guild:
+            return
+        
+        # Cooldown de 60 secondes entre chaque gain d'XP
+        user_key = f"{message.author.id}_{message.guild.id}"
+        now = datetime.utcnow()
+        
+        if user_key in self.xp_cooldown:
+            if now - self.xp_cooldown[user_key] < timedelta(seconds=60):
+                return
+        
+        self.xp_cooldown[user_key] = now
+        
+        # Gain d'XP aléatoire entre 15 et 25
+        xp_gain = random.randint(15, 25)
+        
+        async for session in self.bot.db.get_session():
+            # Récupérer ou créer l'utilisateur
+            result = await session.execute(
+                select(UserModel).where(
+                    UserModel.id == message.author.id,
+                    UserModel.guild_id == message.guild.id
+                )
+            )
+            user = result.scalar_one_or_none()
+            
+            if not user:
+                user = UserModel(
+                    id=message.author.id,
+                    guild_id=message.guild.id,
+                    xp=xp_gain,
+                    level=0,
+                    messages=1
+                )
+                session.add(user)
+            else:
+                old_level = user.level
+                user.xp += xp_gain
+                user.messages += 1
+                user.last_message = now
+                
+                # Vérifier si le niveau a augmenté
+                new_level = self.calculate_level(user.xp)
+                if new_level > old_level:
+                    user.level = new_level
+                    
+                    # Message de level up
+                    await self.send_levelup_message(message, new_level)
+    
+    async def send_levelup_message(self, message: discord.Message, level: int):
+        """Envoie un message de montée de niveau"""
+        async for session in self.bot.db.get_session():
+            result = await session.execute(
+                select(GuildModel).where(GuildModel.id == message.guild.id)
+            )
+            guild_config = result.scalar_one_or_none()
+            
+            embed = discord.Embed(
+                title="🎉 Level Up!",
+                description=f"{message.author.mention} vient d'atteindre le **niveau {level}** !",
+                color=discord.Color.gold()
+            )
+            embed.set_thumbnail(url=message.author.display_avatar.url)
+            
+            # Canal personnalisé ou canal actuel
+            channel = message.channel
+            if guild_config and guild_config.level_up_channel_id:
+                channel = message.guild.get_channel(guild_config.level_up_channel_id) or channel
+            
+            try:
+                await channel.send(embed=embed)
+            except Exception as e:
+                logger.error(f"Erreur lors de l'envoi du message de level up: {e}")
+    
+    @app_commands.command(name="rank", description="Affiche ton niveau et XP")
+    @app_commands.describe(user="L'utilisateur dont voir le niveau")
+    async def rank(self, interaction: discord.Interaction, user: discord.Member = None):
+        """Affiche le niveau d'un utilisateur"""
+        target = user or interaction.user
+        
+        async for session in self.bot.db.get_session():
+            result = await session.execute(
+                select(UserModel).where(
+                    UserModel.id == target.id,
+                    UserModel.guild_id == interaction.guild_id
+                )
+            )
+            user_data = result.scalar_one_or_none()
+            
+            if not user_data:
+                await interaction.response.send_message(
+                    f"{target.mention} n'a pas encore d'XP sur ce serveur.",
+                    ephemeral=True
+                )
+                return
+            
+            current_level_xp = self.xp_for_level(user_data.level)
+            next_level_xp = self.xp_for_level(user_data.level + 1)
+            xp_needed = next_level_xp - user_data.xp
+            progress = ((user_data.xp - current_level_xp) / (next_level_xp - current_level_xp)) * 100
+            
+            embed = discord.Embed(
+                title=f"📊 Niveau de {target.display_name}",
+                color=discord.Color.blue()
+            )
+            embed.set_thumbnail(url=target.display_avatar.url)
+            embed.add_field(name="Niveau", value=f"**{user_data.level}**", inline=True)
+            embed.add_field(name="XP Total", value=f"**{user_data.xp:,}**", inline=True)
+            embed.add_field(name="Messages", value=f"**{user_data.messages:,}**", inline=True)
+            embed.add_field(
+                name="Progression",
+                value=f"{'█' * int(progress // 5)}{'░' * (20 - int(progress // 5))} {progress:.1f}%\n"
+                      f"**{xp_needed:,}** XP jusqu'au niveau {user_data.level + 1}",
+                inline=False
+            )
+            
+            await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="leaderboard", description="Affiche le classement du serveur")
+    async def leaderboard(self, interaction: discord.Interaction):
+        """Affiche le top 10 des utilisateurs"""
+        async for session in self.bot.db.get_session():
+            result = await session.execute(
+                select(UserModel)
+                .where(UserModel.guild_id == interaction.guild_id)
+                .order_by(UserModel.xp.desc())
+                .limit(10)
+            )
+            users = result.scalars().all()
+            
+            if not users:
+                await interaction.response.send_message(
+                    "Aucun utilisateur n'a encore d'XP sur ce serveur.",
+                    ephemeral=True
+                )
+                return
+            
+            embed = discord.Embed(
+                title=f"🏆 Classement de {interaction.guild.name}",
+                color=discord.Color.gold()
+            )
+            
+            medals = ["🥇", "🥈", "🥉"]
+            for i, user_data in enumerate(users, 1):
+                member = interaction.guild.get_member(user_data.id)
+                if member:
+                    medal = medals[i-1] if i <= 3 else f"#{i}"
+                    embed.add_field(
+                        name=f"{medal} {member.display_name}",
+                        value=f"Niveau: **{user_data.level}** | XP: **{user_data.xp:,}**",
+                        inline=False
+                    )
+            
+            await interaction.response.send_message(embed=embed)
+
+async def setup(bot):
+    await bot.add_cog(Leveling(bot))

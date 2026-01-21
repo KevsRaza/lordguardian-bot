@@ -1,0 +1,175 @@
+"""
+Système d'économie avec monnaie virtuelle
+"""
+import discord
+from discord import app_commands
+from discord.ext import commands
+from sqlalchemy import select
+from src.core.database import Economy as EconomyModel  # ← CORRIGÉ
+from datetime import datetime, timedelta
+import random
+
+class Economy(commands.Cog):
+    """Système économique du serveur"""
+    
+    def __init__(self, bot):
+        self.bot = bot
+    
+    async def get_balance(self, session, user_id: int, guild_id: int):
+        """Récupère ou crée le compte économique d'un utilisateur"""
+        result = await session.execute(
+            select(EconomyModel).where(
+                EconomyModel.user_id == user_id,
+                EconomyModel.guild_id == guild_id
+            )
+        )
+        account = result.scalar_one_or_none()
+        
+        if not account:
+            account = EconomyModel(user_id=user_id, guild_id=guild_id)
+            session.add(account)
+        
+        return account
+    
+    @app_commands.command(name="balance", description="Affiche ton solde")
+    @app_commands.describe(user="L'utilisateur dont voir le solde")
+    async def balance(self, interaction: discord.Interaction, user: discord.Member = None):
+        """Affiche le solde d'un utilisateur"""
+        target = user or interaction.user
+        
+        async for session in self.bot.db.get_session():
+            account = await self.get_balance(session, target.id, interaction.guild_id)
+            
+            embed = discord.Embed(
+                title=f"💰 Porte-monnaie de {target.display_name}",
+                color=discord.Color.gold()
+            )
+            embed.add_field(name="💵 Portefeuille", value=f"**{account.balance:,}** coins", inline=True)
+            embed.add_field(name="🏦 Banque", value=f"**{account.bank:,}** coins", inline=True)
+            embed.add_field(name="💎 Total", value=f"**{account.balance + account.bank:,}** coins", inline=False)
+            embed.set_thumbnail(url=target.display_avatar.url)
+            
+            await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="daily", description="Récupère ta récompense quotidienne")
+    async def daily(self, interaction: discord.Interaction):
+        """Récompense quotidienne"""
+        async for session in self.bot.db.get_session():
+            account = await self.get_balance(session, interaction.user.id, interaction.guild_id)
+            
+            now = datetime.utcnow()
+            if account.daily_claimed:
+                time_since = now - account.daily_claimed
+                if time_since < timedelta(hours=24):
+                    remaining = timedelta(hours=24) - time_since
+                    hours = int(remaining.total_seconds() // 3600)
+                    minutes = int((remaining.total_seconds() % 3600) // 60)
+                    
+                    await interaction.response.send_message(
+                        f"⏰ Tu as déjà récupéré ta récompense quotidienne ! "
+                        f"Reviens dans **{hours}h {minutes}m**.",
+                        ephemeral=True
+                    )
+                    return
+            
+            reward = random.randint(100, 500)
+            account.balance += reward
+            account.daily_claimed = now
+            
+            embed = discord.Embed(
+                title="🎁 Récompense quotidienne",
+                description=f"Tu as reçu **{reward:,}** coins !",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Nouveau solde", value=f"**{account.balance:,}** coins")
+            
+            await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="deposit", description="Dépose de l'argent à la banque")
+    @app_commands.describe(amount="Montant à déposer (ou 'all' pour tout déposer)")
+    async def deposit(self, interaction: discord.Interaction, amount: str):
+        """Dépose de l'argent à la banque"""
+        async for session in self.bot.db.get_session():
+            account = await self.get_balance(session, interaction.user.id, interaction.guild_id)
+            
+            if amount.lower() == "all":
+                amount_to_deposit = account.balance
+            else:
+                try:
+                    amount_to_deposit = int(amount)
+                except ValueError:
+                    await interaction.response.send_message(
+                        "❌ Montant invalide. Utilise un nombre ou 'all'.",
+                        ephemeral=True
+                    )
+                    return
+            
+            if amount_to_deposit <= 0:
+                await interaction.response.send_message("❌ Montant invalide.", ephemeral=True)
+                return
+            
+            if account.balance < amount_to_deposit:
+                await interaction.response.send_message(
+                    "❌ Tu n'as pas assez d'argent dans ton portefeuille.",
+                    ephemeral=True
+                )
+                return
+            
+            account.balance -= amount_to_deposit
+            account.bank += amount_to_deposit
+            
+            embed = discord.Embed(
+                title="🏦 Dépôt effectué",
+                description=f"Tu as déposé **{amount_to_deposit:,}** coins à la banque.",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="💵 Portefeuille", value=f"{account.balance:,}", inline=True)
+            embed.add_field(name="🏦 Banque", value=f"{account.bank:,}", inline=True)
+            
+            await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="withdraw", description="Retire de l'argent de la banque")
+    @app_commands.describe(amount="Montant à retirer (ou 'all' pour tout retirer)")
+    async def withdraw(self, interaction: discord.Interaction, amount: str):
+        """Retire de l'argent de la banque"""
+        async for session in self.bot.db.get_session():
+            account = await self.get_balance(session, interaction.user.id, interaction.guild_id)
+            
+            if amount.lower() == "all":
+                amount_to_withdraw = account.bank
+            else:
+                try:
+                    amount_to_withdraw = int(amount)
+                except ValueError:
+                    await interaction.response.send_message(
+                        "❌ Montant invalide. Utilise un nombre ou 'all'.",
+                        ephemeral=True
+                    )
+                    return
+            
+            if amount_to_withdraw <= 0:
+                await interaction.response.send_message("❌ Montant invalide.", ephemeral=True)
+                return
+            
+            if account.bank < amount_to_withdraw:
+                await interaction.response.send_message(
+                    "❌ Tu n'as pas assez d'argent à la banque.",
+                    ephemeral=True
+                )
+                return
+            
+            account.bank -= amount_to_withdraw
+            account.balance += amount_to_withdraw
+            
+            embed = discord.Embed(
+                title="💰 Retrait effectué",
+                description=f"Tu as retiré **{amount_to_withdraw:,}** coins de la banque.",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="💵 Portefeuille", value=f"{account.balance:,}", inline=True)
+            embed.add_field(name="🏦 Banque", value=f"{account.bank:,}", inline=True)
+            
+            await interaction.response.send_message(embed=embed)
+
+async def setup(bot):
+    await bot.add_cog(Economy(bot))

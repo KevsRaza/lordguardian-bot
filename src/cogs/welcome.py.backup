@@ -1,0 +1,135 @@
+"""
+Cog pour les messages de bienvenue et départ
+"""
+import discord
+from discord import app_commands
+from discord.ext import commands
+from sqlalchemy import select, update
+from src.core.database import Guild as GuildModel  # ← CORRIGÉ
+from src.core.logger import setup_logger  # ← CORRIGÉ
+
+logger = setup_logger("Welcome")
+
+class Welcome(commands.Cog):
+    """Gestion des messages de bienvenue"""
+    
+    def __init__(self, bot):
+        self.bot = bot
+    
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member):
+        """Événement déclenché quand un membre rejoint le serveur"""
+        async for session in self.bot.db.get_session():
+            result = await session.execute(
+                select(GuildModel).where(GuildModel.id == member.guild.id)
+            )
+            guild_config = result.scalar_one_or_none()
+            
+            if not guild_config or not guild_config.welcome_channel_id:
+                return
+            
+            channel = member.guild.get_channel(guild_config.welcome_channel_id)
+            if not channel:
+                return
+            
+            # Message par défaut
+            message = guild_config.welcome_message or f"Bienvenue {member.mention} sur **{member.guild.name}** ! 🎉"
+            
+            # Remplacer les variables
+            message = message.replace("{user}", member.mention)
+            message = message.replace("{server}", member.guild.name)
+            message = message.replace("{count}", str(member.guild.member_count))
+            
+            embed = discord.Embed(
+                title="👋 Nouveau membre !",
+                description=message,
+                color=discord.Color.green()
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.set_footer(text=f"Membre #{member.guild.member_count}")
+            
+            try:
+                await channel.send(embed=embed)
+                
+                # Auto-role si configuré
+                if guild_config.auto_role_id:
+                    role = member.guild.get_role(guild_config.auto_role_id)
+                    if role:
+                        await member.add_roles(role)
+                        logger.info(f"Rôle automatique donné à {member.name}")
+            except Exception as e:
+                logger.error(f"Erreur lors de l'envoi du message de bienvenue: {e}")
+    
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        """Événement déclenché quand un membre quitte le serveur"""
+        async for session in self.bot.db.get_session():
+            result = await session.execute(
+                select(GuildModel).where(GuildModel.id == member.guild.id)
+            )
+            guild_config = result.scalar_one_or_none()
+            
+            if not guild_config or not guild_config.welcome_channel_id or not guild_config.leave_message:
+                return
+            
+            channel = member.guild.get_channel(guild_config.welcome_channel_id)
+            if not channel:
+                return
+            
+            message = guild_config.leave_message.replace("{user}", member.name)
+            message = message.replace("{server}", member.guild.name)
+            
+            embed = discord.Embed(
+                title="👋 Membre parti",
+                description=message,
+                color=discord.Color.red()
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            
+            try:
+                await channel.send(embed=embed)
+            except Exception as e:
+                logger.error(f"Erreur lors de l'envoi du message de départ: {e}")
+    
+    @app_commands.command(name="setwelcome", description="Configure le canal de bienvenue")
+    @app_commands.describe(channel="Le canal pour les messages de bienvenue")
+    @app_commands.default_permissions(administrator=True)
+    async def set_welcome(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        """Définit le canal de bienvenue"""
+        async for session in self.bot.db.get_session():
+            await session.execute(
+                update(GuildModel)
+                .where(GuildModel.id == interaction.guild_id)
+                .values(welcome_channel_id=channel.id)
+            )
+            await session.commit()  # ← N'oubliez pas le commit !
+        
+        embed = discord.Embed(
+            title="✅ Canal de bienvenue configuré",
+            description=f"Les messages de bienvenue seront envoyés dans {channel.mention}",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="welcomemsg", description="Personnalise le message de bienvenue")
+    @app_commands.describe(message="Message personnalisé (utilisez {user}, {server}, {count})")
+    @app_commands.default_permissions(administrator=True)
+    async def welcome_message(self, interaction: discord.Interaction, message: str):
+        """Définit le message de bienvenue personnalisé"""
+        async for session in self.bot.db.get_session():
+            await session.execute(
+                update(GuildModel)
+                .where(GuildModel.id == interaction.guild_id)
+                .values(welcome_message=message)
+            )
+            await session.commit()  # ← N'oubliez pas le commit !
+        
+        embed = discord.Embed(
+            title="✅ Message de bienvenue configuré",
+            description=f"Nouveau message:\n{message}",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed)
+
+async def setup(bot):
+    await bot.add_cog(Welcome(bot))

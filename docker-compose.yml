@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: guildgreeter-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - bot-network
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: guildgreeter-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-botuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-botpassword}
+      POSTGRES_DB: ${POSTGRES_DB:-guildgreeter}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - bot-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: guildgreeter-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - bot-network
+
+  web:
+    build: .
+    container_name: guildgreeter-web
+    restart: unless-stopped
+    command: uvicorn src.web.app:app --host 0.0.0.0 --port 8080
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - bot-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  bot-network:
+    driver: bridge

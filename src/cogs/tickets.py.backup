@@ -1,0 +1,275 @@
+"""
+Système de tickets de support
+"""
+import discord
+from discord import app_commands
+from discord.ext import commands
+from sqlalchemy import select, update
+from src.core.database import Ticket as TicketModel  # ← CORRIGÉ
+from datetime import datetime
+
+class TicketButton(discord.ui.Button):
+    """Bouton pour créer un ticket"""
+    
+    def __init__(self):
+        super().__init__(
+            label="Créer un ticket",
+            style=discord.ButtonStyle.green,
+            emoji="🎫"
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(TicketModal())
+
+class TicketModal(discord.ui.Modal, title="Créer un ticket"):
+    """Modal pour créer un ticket"""
+    
+    subject = discord.ui.TextInput(
+        label="Sujet",
+        placeholder="Ex: Problème de connexion",
+        max_length=100,
+        required=True
+    )
+    
+    description = discord.ui.TextInput(
+        label="Description",
+        placeholder="Décris ton problème en détail...",
+        style=discord.TextStyle.paragraph,
+        max_length=1000,
+        required=True
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        # Vérifier si l'utilisateur a déjà un ticket ouvert
+        bot = interaction.client
+        async for session in bot.db.get_session():
+            result = await session.execute(
+                select(TicketModel).where(
+                    TicketModel.guild_id == interaction.guild_id,
+                    TicketModel.user_id == interaction.user.id,
+                    TicketModel.status == "open"
+                )
+            )
+            existing_ticket = result.scalar_one_or_none()
+            
+            if existing_ticket:
+                channel = interaction.guild.get_channel(existing_ticket.channel_id)
+                if channel:
+                    await interaction.followup.send(
+                        f"❌ Tu as déjà un ticket ouvert: {channel.mention}",
+                        ephemeral=True
+                    )
+                    return
+            
+            # Créer le canal du ticket
+            category = discord.utils.get(interaction.guild.categories, name="Tickets")
+            if not category:
+                category = await interaction.guild.create_category("Tickets")
+            
+            overwrites = {
+                interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            }
+            
+            # Ajouter les modérateurs
+            for role in interaction.guild.roles:
+                if role.permissions.manage_messages:
+                    overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            
+            ticket_channel = await category.create_text_channel(
+                name=f"ticket-{interaction.user.name}",
+                overwrites=overwrites
+            )
+            
+            # Sauvegarder dans la base de données
+            new_ticket = TicketModel(
+                guild_id=interaction.guild_id,
+                channel_id=ticket_channel.id,
+                user_id=interaction.user.id,
+                category=str(self.subject)
+            )
+            session.add(new_ticket)
+            
+            # Créer l'embed du ticket
+            embed = discord.Embed(
+                title=f"🎫 Ticket de {interaction.user.display_name}",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Sujet", value=self.subject.value, inline=False)
+            embed.add_field(name="Description", value=self.description.value, inline=False)
+            embed.add_field(name="Créé le", value=f"<t:{int(datetime.utcnow().timestamp())}:F>", inline=False)
+            embed.set_footer(text=f"ID: {interaction.user.id}")
+            
+            # Ajouter un bouton pour fermer le ticket
+            view = TicketControlView()
+            
+            await ticket_channel.send(
+                content=f"{interaction.user.mention}",
+                embed=embed,
+                view=view
+            )
+            
+            await interaction.followup.send(
+                f"✅ Ticket créé: {ticket_channel.mention}",
+                ephemeral=True
+            )
+
+class TicketControlView(discord.ui.View):
+    """Vue pour contrôler le ticket"""
+    
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="Fermer le ticket", style=discord.ButtonStyle.red, emoji="🔒")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Ferme le ticket"""
+        bot = interaction.client
+        
+        async for session in bot.db.get_session():
+            result = await session.execute(
+                select(TicketModel).where(TicketModel.channel_id == interaction.channel_id)
+            )
+            ticket = result.scalar_one_or_none()
+            
+            if not ticket:
+                await interaction.response.send_message("❌ Ticket introuvable.", ephemeral=True)
+                return
+            
+            # Mettre à jour le statut
+            ticket.status = "closed"
+            ticket.closed_at = datetime.utcnow()
+            
+            embed = discord.Embed(
+                title="🔒 Ticket fermé",
+                description=f"Ce ticket a été fermé par {interaction.user.mention}.",
+                color=discord.Color.red()
+            )
+            embed.add_field(
+                name="Actions",
+                value="Ce canal sera supprimé dans 10 secondes.",
+                inline=False
+            )
+            
+            await interaction.response.send_message(embed=embed)
+            
+            # Attendre avant de supprimer
+            await interaction.channel.delete(delay=10)
+
+class TicketPanelView(discord.ui.View):
+    """Vue pour le panel de tickets"""
+    
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(TicketButton())
+
+class Tickets(commands.Cog):
+    """Système de tickets de support"""
+    
+    def __init__(self, bot):
+        self.bot = bot
+    
+    @app_commands.command(name="ticket-panel", description="Crée un panel pour ouvrir des tickets")
+    @app_commands.default_permissions(administrator=True)
+    async def ticket_panel(self, interaction: discord.Interaction):
+        """Crée un panel pour ouvrir des tickets"""
+        embed = discord.Embed(
+            title="🎫 Support - Créer un ticket",
+            description=(
+                "Besoin d'aide ? Clique sur le bouton ci-dessous pour créer un ticket.\n\n"
+                "**Quand créer un ticket ?**\n"
+                "• Pour signaler un problème\n"
+                "• Pour poser une question\n"
+                "• Pour demander de l'aide\n"
+                "• Pour contacter le staff\n\n"
+                "Un membre du staff te répondra dès que possible."
+            ),
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text="Notre équipe est là pour t'aider !")
+        
+        view = TicketPanelView()
+        await interaction.response.send_message(embed=embed, view=view)
+    
+    @app_commands.command(name="ticket-close", description="Ferme le ticket actuel")
+    async def ticket_close(self, interaction: discord.Interaction):
+        """Ferme le ticket actuel"""
+        async for session in self.bot.db.get_session():
+            result = await session.execute(
+                select(TicketModel).where(
+                    TicketModel.channel_id == interaction.channel_id,
+                    TicketModel.status == "open"
+                )
+            )
+            ticket = result.scalar_one_or_none()
+            
+            if not ticket:
+                await interaction.response.send_message(
+                    "❌ Ce canal n'est pas un ticket ou il est déjà fermé.",
+                    ephemeral=True
+                )
+                return
+            
+            ticket.status = "closed"
+            ticket.closed_at = datetime.utcnow()
+            
+            embed = discord.Embed(
+                title="🔒 Ticket fermé",
+                description=f"Ce ticket a été fermé par {interaction.user.mention}.",
+                color=discord.Color.red()
+            )
+            
+            await interaction.response.send_message(embed=embed)
+            await interaction.channel.delete(delay=10)
+    
+    @app_commands.command(name="tickets", description="Liste tous les tickets")
+    @app_commands.default_permissions(manage_messages=True)
+    async def tickets_list(self, interaction: discord.Interaction):
+        """Liste tous les tickets du serveur"""
+        async for session in self.bot.db.get_session():
+            result = await session.execute(
+                select(TicketModel)
+                .where(TicketModel.guild_id == interaction.guild_id)
+                .order_by(TicketModel.created_at.desc())
+                .limit(25)
+            )
+            tickets = result.scalars().all()
+            
+            if not tickets:
+                await interaction.response.send_message(
+                    "📋 Aucun ticket trouvé.",
+                    ephemeral=True
+                )
+                return
+            
+            embed = discord.Embed(
+                title=f"🎫 Tickets de {interaction.guild.name}",
+                color=discord.Color.blue()
+            )
+            
+            open_tickets = [t for t in tickets if t.status == "open"]
+            closed_tickets = [t for t in tickets if t.status == "closed"]
+            
+            embed.add_field(
+                name="📊 Statistiques",
+                value=f"**Ouverts:** {len(open_tickets)}\n**Fermés:** {len(closed_tickets)}\n**Total:** {len(tickets)}",
+                inline=False
+            )
+            
+            if open_tickets:
+                tickets_text = "\n".join([
+                    f"<#{t.channel_id}> - <@{t.user_id}> - <t:{int(t.created_at.timestamp())}:R>"
+                    for t in open_tickets[:10]
+                ])
+                embed.add_field(
+                    name="🟢 Tickets ouverts",
+                    value=tickets_text,
+                    inline=False
+                )
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+async def setup(bot):
+    await bot.add_cog(Tickets(bot))
