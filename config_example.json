@@ -1,0 +1,36 @@
+{
+    "welcome_channel_id": null,
+    "auto_role_id": null,
+    "log_channel_id": null,
+    "welcome_message": "Bienvenue {user} sur **{server}** ! 🎉",
+    
+    "economy": {
+        "starting_balance": 1000,
+        "daily_min": 100,
+        "daily_max": 500,
+        "currency_name": "coins",
+        "currency_symbol": "🪙"
+    },
+    
+    "leveling": {
+        "xp_per_message": 15,
+        "xp_cooldown": 60,
+        "level_multiplier": 100
+    },
+    
+    "casino": {
+        "min_bet": 10,
+        "max_bet": 10000,
+        "house_edge": 0.1
+    },
+    
+    "shop": {
+        "enabled": true,
+        "tax_rate": 0.05
+    },
+    
+    "tickets": {
+        "category_id": null,
+        "support_role_id": null
+    }
+}

@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+
+{% block title %}{{ guild.name }} - Dashboard{% endblock %}
+
+{% block extra_css %}
+<style>
+    .guild-header {
+        background: white;
+        padding: 2rem;
+        border-radius: 10px;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        margin-bottom: 2rem;
+        display: flex;
+        align-items: center;
+        gap: 2rem;
+    }
+    
+    .guild-header-icon {
+        width: 100px;
+        height: 100px;
+        border-radius: 50%;
+    }
+    
+    .guild-header-info h1 {
+        margin-bottom: 0.5rem;
+    }
+    
+    .guild-header-info p {
+        color: #666;
+    }
+    
+    .settings-container {
+        background: white;
+        padding: 2rem;
+        border-radius: 10px;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+    }
+    
+    .setting-section {
+        margin-bottom: 2rem;
+        padding-bottom: 2rem;
+        border-bottom: 1px solid #e0e0e0;
+    }
+    
+    .setting-section:last-child {
+        border-bottom: none;
+        margin-bottom: 0;
+        padding-bottom: 0;
+    }
+    
+    .setting-section h2 {
+        margin-bottom: 1rem;
+        color: #667eea;
+    }
+    
+    .form-group {
+        margin-bottom: 1.5rem;
+    }
+    
+    .form-group label {
+        display: block;
+        margin-bottom: 0.5rem;
+        font-weight: 600;
+    }
+    
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+        width: 100%;
+        padding: 0.75rem;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        font-size: 1rem;
+    }
+    
+    .form-group textarea {
+        min-height: 100px;
+        resize: vertical;
+    }
+    
+    .toggle-switch {
+        position: relative;
+        display: inline-block;
+        width: 60px;
+        height: 34px;
+    }
+    
+    .toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+    
+    .slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: .4s;
+        border-radius: 34px;
+    }
+    
+    .slider:before {
+        position: absolute;
+        content: "";
+        height: 26px;
+        width: 26px;
+        left: 4px;
+        bottom: 4px;
+        background-color: white;
+        transition: .4s;
+        border-radius: 50%;
+    }
+    
+    input:checked + .slider {
+        background-color: #667eea;
+    }
+    
+    input:checked + .slider:before {
+        transform: translateX(26px);
+    }
+    
+    .save-btn {
+        margin-top: 2rem;
+    }
+    
+    .alert {
+        padding: 1rem;
+        border-radius: 5px;
+        margin-bottom: 1rem;
+    }
+    
+    .alert-success {
+        background: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+    }
+    
+    .alert-error {
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<a href="/dashboard" style="color: white; text-decoration: none; margin-bottom: 1rem; display: inline-block;">&larr; Back to Dashboard</a>
+
+<div class="guild-header">
+    {% if guild.icon %}
+    <img src="{{ guild.icon }}" alt="{{ guild.name }}" class="guild-header-icon">
+    {% else %}
+    <div class="guild-header-icon" style="background: #667eea; display: flex; align-items: center; justify-content: center; color: white; font-size: 2rem;">
+        {{ guild.name[0] }}
+    </div>
+    {% endif %}
+    <div class="guild-header-info">
+        <h1>{{ guild.name }}</h1>
+        <p>{{ guild.member_count }} members</p>
+    </div>
+</div>
+
+<div id="alert-container"></div>
+
+<div class="settings-container">
+    <div class="setting-section">
+        <h2>⚙️ General Settings</h2>
+        <div class="form-group">
+            <label for="prefix">Command Prefix</label>
+            <input type="text" id="prefix" placeholder="!" value="!">
+        </div>
+    </div>
+    
+    <div class="setting-section">
+        <h2>👋 Welcome System</h2>
+        <div class="form-group">
+            <label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="welcome-enabled" checked>
+                    <span class="slider"></span>
+                </label>
+                Enable Welcome Messages
+            </label>
+        </div>
+        <div class="form-group">
+            <label for="welcome-channel">Welcome Channel</label>
+            <select id="welcome-channel">
+                <option value="">Select a channel...</option>
+                {% for channel in guild.channels %}
+                    {% if channel.type == "ChannelType.text" %}
+                    <option value="{{ channel.id }}">{{ channel.name }}</option>
+                    {% endif %}
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="welcome-message">Welcome Message</label>
+            <textarea id="welcome-message" placeholder="Use {user} for mention, {server} for server name">Welcome {user} to {server}!</textarea>
+        </div>
+    </div>
+    
+    <div class="setting-section">
+        <h2>📊 Leveling System</h2>
+        <div class="form-group">
+            <label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="leveling-enabled" checked>
+                    <span class="slider"></span>
+                </label>
+                Enable Leveling
+            </label>
+        </div>
+    </div>
+    
+    <button class="btn btn-primary save-btn" onclick="saveSettings()">Save Changes</button>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function saveSettings() {
+    const settings = {
+        prefix: document.getElementById('prefix').value,
+        welcome_enabled: document.getElementById('welcome-enabled').checked,
+        welcome_channel: document.getElementById('welcome-channel').value,
+        welcome_message: document.getElementById('welcome-message').value,
+        leveling_enabled: document.getElementById('leveling-enabled').checked
+    };
+    
+    fetch('/api/guilds/{{ guild.id }}/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(settings)
+    })
+    .then(response => response.json())
+    .then(data => {
+        showAlert(data.success ? 'Settings saved successfully!' : 'Failed to save settings', data.success);
+    })
+    .catch(error => {
+        showAlert('An error occurred', false);
+    });
+}
+
+function showAlert(message, isSuccess) {
+    const alertContainer = document.getElementById('alert-container');
+    const alertClass = isSuccess ? 'alert-success' : 'alert-error';
+    alertContainer.innerHTML = `<div class="alert ${alertClass}">${message}</div>`;
+    
+    setTimeout(() => {
+        alertContainer.innerHTML = '';
+    }, 3000);
+}
+</script>
+{% endblock %}

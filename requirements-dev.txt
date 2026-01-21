@@ -1,0 +1,37 @@
+# Discord
+discord.py==2.6.4
+py-cord>=2.4.1
+
+# Database
+asyncpg>=0.29.0
+alembic>=1.13.0
+SQLAlchemy==2.0.46
+aiosqlite==0.22.1
+
+# Web Framework
+fastapi==0.128.0
+uvicorn[standard]>=0.27.0
+jinja2>=3.1.3
+python-multipart>=0.0.6
+
+# HTTP Client (remplace requests)
+httpx==0.28.1
+
+# Keep Alive (optionnel - pour Replit/hébergement)
+Flask==3.1.2
+
+# Auth
+pyjwt>=2.8.0
+python-jose[cryptography]>=3.3.0
+
+# Utils
+python-dotenv==1.2.1
+aiohttp==3.13.2
+python-dateutil>=2.8.2
+pytz>=2023.3
+
+# Monitoring
+psutil>=5.9.7
+
+# Cache
+aioredis>=2.0.1

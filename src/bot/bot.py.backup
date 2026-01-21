@@ -1,0 +1,179 @@
+"""
+Bot principal GuildGreeter
+"""
+import discord
+from discord.ext import commands
+from discord.ui import Button, View
+import json
+import os
+from pathlib import Path
+
+class GuildGreeterBot(commands.Bot):
+    """Bot Discord principal pour GuildGreeter"""
+    
+    def __init__(self, config):
+        """
+        Initialise le bot
+        
+        Args:
+            config: Configuration du bot (objet Config)
+        """
+        # Définir les intents
+        intents = discord.Intents.default()
+        intents.members = True
+        intents.message_content = True
+        intents.guilds = True
+        
+        # Initialiser le bot
+        super().__init__(
+            command_prefix=getattr(config, 'prefix', '!'),
+            intents=intents,
+            help_command=None
+        )
+        
+        self.config = config
+        self.config_file = "config.json"
+        
+        # Enregistrer les événements
+        self.setup_events()
+        
+        # Enregistrer les commandes de base
+        self.setup_commands()
+    
+    async def setup_hook(self):
+        """Appelé lors du setup du bot - charge les extensions"""
+        from bot.extensions import load_extensions
+        await load_extensions(self)
+    
+    def setup_events(self):
+        """Configure les événements du bot"""
+        
+        @self.event
+        async def on_ready():
+            print("\n" + "=" * 50)
+            print(f"✅ GuildGreeter connecté en tant que {self.user}")
+            print(f"📊 Serveurs: {len(self.guilds)}")
+            print(f"👥 Membres: {sum(g.member_count for g in self.guilds)}")
+            print(f"🎯 Préfixe: {self.command_prefix}")
+            print("=" * 50 + "\n")
+        
+        @self.event
+        async def on_member_join(member: discord.Member):
+            config = self.load_bot_config()
+
+            welcome_channel = member.guild.get_channel(config["welcome_channel_id"]) if config["welcome_channel_id"] else None
+            log_channel = member.guild.get_channel(config["log_channel_id"]) if config["log_channel_id"] else None
+            role = member.guild.get_role(config["auto_role_id"]) if config["auto_role_id"] else None
+
+            # Message personnalisé
+            message = config["welcome_message"] \
+                .replace("{user}", member.mention) \
+                .replace("{server}", member.guild.name)
+
+            # Bouton Discord
+            button = Button(label="📜 Lire les règles", style=discord.ButtonStyle.primary)
+
+            async def button_callback(interaction):
+                await interaction.response.send_message(
+                    "Merci de lire les règles du serveur 📌",
+                    ephemeral=True
+                )
+
+            button.callback = button_callback
+            view = View()
+            view.add_item(button)
+
+            # Envoi du message de bienvenue
+            if welcome_channel:
+                embed = discord.Embed(
+                    title="🎉 Nouveau membre",
+                    description=message,
+                    color=discord.Color.green()
+                )
+                await welcome_channel.send(embed=embed, view=view)
+
+            # Auto-role
+            if role:
+                await member.add_roles(role)
+
+            # Message privé
+            try:
+                await member.send(
+                    f"👋 Bienvenue sur **{member.guild.name}** !\nNous sommes ravis de t'accueillir."
+                )
+            except discord.Forbidden:
+                pass
+
+            # Logs
+            if log_channel:
+                await log_channel.send(f"📥 {member} a rejoint le serveur.")
+    
+    def setup_commands(self):
+        """Configure les commandes de base du bot"""
+        
+        @self.command()
+        @commands.has_permissions(administrator=True)
+        async def setwelcome(ctx, channel: discord.TextChannel):
+            """Définit le canal de bienvenue"""
+            config = self.load_bot_config()
+            config["welcome_channel_id"] = channel.id
+            self.save_bot_config(config)
+            await ctx.send(f"✅ Canal de bienvenue défini : {channel.mention}")
+
+        @self.command()
+        @commands.has_permissions(administrator=True)
+        async def setrole(ctx, role: discord.Role):
+            """Définit le rôle automatique"""
+            config = self.load_bot_config()
+            config["auto_role_id"] = role.id
+            self.save_bot_config(config)
+            await ctx.send(f"✅ Rôle automatique défini : {role.name}")
+
+        @self.command()
+        @commands.has_permissions(administrator=True)
+        async def setlog(ctx, channel: discord.TextChannel):
+            """Définit le canal de logs"""
+            config = self.load_bot_config()
+            config["log_channel_id"] = channel.id
+            self.save_bot_config(config)
+            await ctx.send(f"✅ Canal de logs défini : {channel.mention}")
+
+        @self.command()
+        @commands.has_permissions(administrator=True)
+        async def setwelcomemsg(ctx, *, message):
+            """Définit le message de bienvenue personnalisé"""
+            config = self.load_bot_config()
+            config["welcome_message"] = message
+            self.save_bot_config(config)
+            await ctx.send("✅ Message de bienvenue mis à jour.")
+
+        @self.command()
+        async def testwelcome(ctx):
+            """Teste le message de bienvenue"""
+            member = ctx.author
+            # Simuler l'événement on_member_join
+            await self.get_cog('on_member_join')(member) if hasattr(self, 'on_member_join') else None
+            await ctx.send("✅ Message de bienvenue testé.")
+
+        @self.command()
+        async def ping(ctx):
+            """Vérifie la latence du bot"""
+            latency = round(self.latency * 1000)
+            await ctx.send(f"🏓 Pong! Latence: {latency}ms")
+    
+    def load_bot_config(self):
+        """Charge la configuration du bot depuis config.json"""
+        if not os.path.exists(self.config_file):
+            return {
+                "welcome_channel_id": None,
+                "auto_role_id": None,
+                "log_channel_id": None,
+                "welcome_message": "Bienvenue {user} sur **{server}** 🎉"
+            }
+        with open(self.config_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def save_bot_config(self, data):
+        """Sauvegarde la configuration du bot"""
+        with open(self.config_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)

@@ -1,0 +1,208 @@
+"""
+Cog d'utilitaires pour le bot
+"""
+import discord
+from discord.ext import commands
+from discord import app_commands
+from src.core.logger import setup_logger  # ← CORRIGÉ
+import datetime
+import random
+
+logger = setup_logger("Utilities")
+
+class Utilities(commands.Cog):
+    """Commandes utilitaires"""
+    
+    def __init__(self, bot):
+        self.bot = bot
+    
+    @commands.command(name="serverinfo")
+    async def server_info(self, ctx):
+        """Affiche les informations du serveur"""
+        guild = ctx.guild
+        
+        embed = discord.Embed(
+            title=f"📊 {guild.name}",
+            color=discord.Color.blue()
+        )
+        
+        embed.set_thumbnail(url=guild.icon.url if guild.icon else None)
+        
+        # Propriétaire
+        embed.add_field(name="👑 Propriétaire", value=guild.owner.mention, inline=True)
+        
+        # Statistiques
+        embed.add_field(name="📅 Créé le", value=f"<t:{int(guild.created_at.timestamp())}:D>", inline=True)
+        embed.add_field(name="🆔 ID", value=guild.id, inline=True)
+        
+        # Membres
+        members = guild.members
+        online = len([m for m in members if m.status != discord.Status.offline])
+        bots = len([m for m in members if m.bot])
+        
+        embed.add_field(name="👥 Membres", value=f"{guild.member_count} total\n{online} en ligne\n{bots} bots", inline=True)
+        
+        # Salons
+        text_channels = len(guild.text_channels)
+        voice_channels = len(guild.voice_channels)
+        
+        embed.add_field(name="💬 Salons", value=f"{text_channels} textuels\n{voice_channels} vocaux", inline=True)
+        
+        # Rôles
+        embed.add_field(name="🎨 Rôles", value=f"{len(guild.roles)} rôles", inline=True)
+        
+        # Boost
+        if guild.premium_subscription_count > 0:
+            boost_level = {0: "Aucun", 1: "Niveau 1", 2: "Niveau 2", 3: "Niveau 3"}
+            embed.add_field(
+                name="✨ Boost",
+                value=f"Niveau {boost_level.get(guild.premium_tier, '?')}\n{guild.premium_subscription_count} boosts",
+                inline=True
+            )
+        
+        await ctx.send(embed=embed)
+    
+    @commands.command(name="userinfo")
+    async def user_info(self, ctx, member: discord.Member = None):
+        """Affiche les informations d'un utilisateur"""
+        member = member or ctx.author
+        
+        embed = discord.Embed(
+            title=f"👤 {member.display_name}",
+            color=member.color if member.color else discord.Color.blue()
+        )
+        
+        embed.set_thumbnail(url=member.display_avatar.url)
+        
+        # Informations de base
+        embed.add_field(name="📛 Nom", value=f"{member.name}#{member.discriminator}", inline=True)
+        embed.add_field(name="🆔 ID", value=member.id, inline=True)
+        
+        # Dates
+        embed.add_field(name="📅 Compte créé", value=f"<t:{int(member.created_at.timestamp())}:R>", inline=True)
+        embed.add_field(name="📅 Rejoint le", value=f"<t:{int(member.joined_at.timestamp())}:R>", inline=True)
+        
+        # Statut
+        status_emojis = {
+            discord.Status.online: "🟢",
+            discord.Status.idle: "🟡", 
+            discord.Status.dnd: "🔴",
+            discord.Status.offline: "⚫"
+        }
+        
+        status = status_emojis.get(member.status, "❓")
+        embed.add_field(name="📱 Statut", value=f"{status} {str(member.status).title()}", inline=True)
+        
+        # Rôles
+        if len(member.roles) > 1:
+            roles = " ".join([role.mention for role in member.roles[1:]])  # Exclure @everyone
+            embed.add_field(name="🎨 Rôles", value=roles[:1024] if len(roles) > 1024 else roles, inline=False)
+        
+        # Badges
+        flags = member.public_flags
+        badges = []
+        
+        if flags.staff: badges.append("👨‍💼 Staff")
+        if flags.partner: badges.append("🤝 Partenaire")
+        if flags.hypesquad: badges.append("🏠 HypeSquad")
+        if flags.bug_hunter: badges.append("🐛 Bug Hunter")
+        if flags.hypesquad_balance: badges.append("⚖️ HypeSquad Balance")
+        if flags.hypesquad_bravery: badges.append("⚔️ HypeSquad Bravery")
+        if flags.hypesquad_brilliance: badges.append("🎓 HypeSquad Brilliance")
+        if flags.early_supporter: badges.append("🔥 Early Supporter")
+        if flags.verified_bot_developer: badges.append("🤖 Dev Bot Vérifié")
+        
+        if badges:
+            embed.add_field(name="🏆 Badges", value=" ".join(badges), inline=False)
+        
+        await ctx.send(embed=embed)
+    
+    @commands.command(name="avatar")
+    async def get_avatar(self, ctx, member: discord.Member = None):
+        """Affiche l'avatar d'un utilisateur"""
+        member = member or ctx.author
+        
+        embed = discord.Embed(
+            title=f"🖼️ Avatar de {member.display_name}",
+            color=member.color if member.color else discord.Color.blue()
+        )
+        
+        embed.set_image(url=member.display_avatar.url)
+        embed.add_field(name="Lien", value=f"[Cliquez ici]({member.display_avatar.url})")
+        
+        await ctx.send(embed=embed)
+    
+    @commands.command(name="poll")
+    @commands.has_permissions(manage_messages=True)
+    async def create_poll(self, ctx, *, question: str):
+        """
+        Crée un sondage
+        
+        Usage: !poll "Question du sondage"
+        """
+        embed = discord.Embed(
+            title="📊 Sondage",
+            description=question,
+            color=discord.Color.purple()
+        )
+        embed.set_footer(text=f"Sondage créé par {ctx.author}")
+        
+        message = await ctx.send(embed=embed)
+        await message.add_reaction("✅")
+        await message.add_reaction("❌")
+    
+    @commands.command(name="8ball")
+    async def eight_ball(self, ctx, *, question: str):
+        """
+        Pose une question à la boule magique
+        
+        Usage: !8ball [question]
+        """
+        responses = [
+            "C'est certain.",
+            "Sans aucun doute.",
+            "Oui, définitivement.",
+            "Vous pouvez compter dessus.",
+            "D'après moi, oui.",
+            "Probablement.",
+            "Les perspectives sont bonnes.",
+            "Oui.",
+            "Les signes indiquent que oui.",
+            "Réponse floue, réessayez.",
+            "Redemandez plus tard.",
+            "Mieux vaut ne pas vous le dire maintenant.",
+            "Impossible de prédire maintenant.",
+            "Concentrez-vous et redemandez.",
+            "Ne comptez pas dessus.",
+            "Ma réponse est non.",
+            "Mes sources disent non.",
+            "Les perspectives ne sont pas bonnes.",
+            "Très douteux."
+        ]
+        
+        embed = discord.Embed(
+            title="🎱 Boule Magique",
+            color=discord.Color.dark_grey()
+        )
+        embed.add_field(name="Question", value=question, inline=False)
+        embed.add_field(name="Réponse", value=random.choice(responses), inline=False)
+        
+        await ctx.send(embed=embed)
+    
+    @commands.command(name="ping")
+    async def ping_command(self, ctx):
+        """Affiche la latence du bot"""
+        latency = round(self.bot.latency * 1000)
+        
+        embed = discord.Embed(
+            title="🏓 Pong!",
+            description=f"Latence: **{latency}ms**",
+            color=discord.Color.green() if latency < 100 else 
+                  discord.Color.yellow() if latency < 300 else 
+                  discord.Color.red()
+        )
+        
+        await ctx.send(embed=embed)
+
+async def setup(bot):
+    await bot.add_cog(Utilities(bot))
